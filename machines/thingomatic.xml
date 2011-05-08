@@ -1,5 +1,35 @@
 <?xml version="1.1" encoding="utf-8"?>
 <machines>
+		<!-- Reprap Poly -->
+	<machine>
+		<name>Reprap Poly 4d</name>
+		<geometry type="cartesian">
+			<!-- different pulleys on X and Y axii -->
+			<axis id="x" length="185" maxfeedrate="8000" homingfeedrate="3000" stepspermm="39.690" endstops="min"/> 
+			<axis id="y" length="175" maxfeedrate="8000" homingfeedrate="3000" stepspermm="28.357" endstops="min"/>
+			<axis id="z" length="100" maxfeedrate="180" homingfeedrate="150" stepspermm="1600" endstops="min"/>
+			<axis id="a" length="10000" maxfeedrate="20000" stepspermm="17.820" endstops="none"/> <!-- stepspermm is incoming filament length, 127 is ca. 4 RPM, 1600 ca. 50 RPM -->
+			<!--axis id="a" length="10000" maxfeedrate="20000" stepspermm="2.1220659" endstops="none"/--> <!-- stepspermm is incoming filament length, 127 is ca. 4 RPM, 1600 ca. 50 RPM -->
+		</geometry>
+		<tools>
+			<!--tool name="Mendel Stepper Extruder" type="extruder" material="pla" motor="true" floodcoolant="false" mistcoolant="false" fan="false" valve="false" collet="false" heater="true" motor_steps="2000"/-->
+			<!--tool name="Pinch Wheel Extruder v1.1" type="extruder" material="pla" motor="true" floodcoolant="false" mistcoolant="false" fan="false" valve="false" collet="false" heater="true"/-->
+			<tool name="Stepstruder MK6" type="extruder" material="pla" motor="true" heatedplatform="false" automatedplatform="true" motor_steps="2000" default_rpm="1.68" heater="true" stepper_axis="a"/>
+			</tools>
+		<clamps></clamps>
+		<driver name="makerbot4g">
+			<!-- optional, defaults to first serial port found.
+		    <portname>COM1</portname> -->
+			<!-- required: we need 8 bit and 38400 baud. -->
+			<rate>38400</rate>
+		</driver>
+		<warmup>
+
+			</warmup>
+		<cooldown>
+
+		</cooldown>
+	</machine>
 	<machine>
 		<name>Thingomatic w/ Automated Build Platform</name>
 		<geometry type="cartesian">

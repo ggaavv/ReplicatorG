@@ -26,7 +26,6 @@
   <property name="ant.build.javac.target" value="1.5"/>
   <property name="test.src.dir"       value="test/src"/>
   <property name="release.name" value="${project}-${replicatorg.version}"/>
-
   <property name="protocols.dir" value="${src.dir}/fabman/messages"/>
   
   <path id="classpath">
