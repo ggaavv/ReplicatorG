@@ -99,7 +99,8 @@ public class Base {
 	/**
 	 * The textual representation of this version (4 digits, zero padded).
 	 */
-	public static final String VERSION_NAME = String.format("%04d",VERSION);
+//	public static final String VERSION_NAME = String.format("%04d",VERSION);
+	public static final String VERSION_NAME = "0025 RC2";
 
 	/**
 	 * The machine controller in use.
@@ -346,7 +347,9 @@ public class Base {
 
 		// Use the default system proxy settings
 		System.setProperty("java.net.useSystemProxies", "true");
-    	
+    	// Use antialiasing implicitly
+		System.setProperty("j3d.implicitAntialiasing", "true");
+		
 		// Start the firmware check thread.
 		FirmwareUploader.checkFirmware();
 		
@@ -427,9 +430,7 @@ public class Base {
 				boolean autoconnect = Base.preferences.getBoolean("replicatorg.autoconnect",true);
 				String machineName = preferences.get("machine.name",null);
 				
-				if (autoconnect) {
-					editor.loadMachine(machineName);
-				}
+				editor.loadMachine(machineName, autoconnect);
 				
 				// show the window
 				editor.setVisible(true);

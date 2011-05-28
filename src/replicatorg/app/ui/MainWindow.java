@@ -1308,7 +1308,7 @@ public class MainWindow extends JFrame implements MRJAboutHandler, MRJQuitHandle
 		
 		String name = Base.preferences.get("machine.name", null);
 		if ( name != null ) {
-			loadMachine(name);
+			loadMachine(name, true);
 		}
 	}
 	
@@ -1680,6 +1680,7 @@ public class MainWindow extends JFrame implements MRJAboutHandler, MRJQuitHandle
 			}
 			else if (evt.getState().getState() == MachineState.State.NOT_ATTACHED) {
 				building = false; // Don't keep the building state when disconnecting from the machine
+				buildingOver();
 			}
 		}
 		if (evt.getState().canPrint()) {
@@ -2017,7 +2018,11 @@ public class MainWindow extends JFrame implements MRJAboutHandler, MRJQuitHandle
 			int option = JOptionPane.showConfirmDialog(this, message, "Abort print?", 
 					JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
 			if (option == JOptionPane.CANCEL_OPTION) { return false; }
+			
+			// Stop the build.
+			doStop();
 		}
+		
 		return true;
 	}
 	/**
@@ -2028,9 +2033,6 @@ public class MainWindow extends JFrame implements MRJAboutHandler, MRJQuitHandle
 		// This is as good a place as any to check that we don't have an in-progress manual build
 		// that could be killed.
 		if (!confirmBuildAbort()) return;
-		
-		// Abort the build
-		doStop();
 		
 		switch (checkModifiedMode) {
 		case HANDLE_NEW:
@@ -2497,8 +2499,9 @@ public class MainWindow extends JFrame implements MRJAboutHandler, MRJQuitHandle
 
 	/**
 	 * @param name       name of the machine
+	 * @param doConnect  perform the connect
 	 */
-	public void loadMachine(String name) {
+	public void loadMachine(String name, boolean doConnect) {
 		// Here we want to:
 		// 1. Create a new machine using the given profile name
 		// 2. If the new machine uses a serial port, connect to the serial port
@@ -2517,16 +2520,15 @@ public class MainWindow extends JFrame implements MRJAboutHandler, MRJQuitHandle
 			return;
 		}
 		
-		// Do we always want to connect here?
-		machineLoader.connect(targetPort);
+		if (doConnect) {
+			machineLoader.connect(targetPort);
+		}
 				
-		// TODO: This needs to be run at program start
 		if (!machineLoader.isLoaded()) {
 			// Buttons will need an explicit null state notification
 			buttons.machineStateChanged(new MachineStateChangeEvent(null, new MachineState(MachineState.State.NOT_ATTACHED)));
 		}
 		
-		// TODO: PreviewPanel: update with new machine
 		if(previewPanel != null)
 		{
 			getPreviewPanel().rebuildScene();
