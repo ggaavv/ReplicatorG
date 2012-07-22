@@ -3,7 +3,6 @@ package replicatorg.machine;
 import java.util.Vector;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
@@ -22,12 +21,13 @@ import replicatorg.drivers.commands.AssessState;
 import replicatorg.drivers.commands.DriverCommand;
 import replicatorg.machine.Machine.JobTarget;
 import replicatorg.machine.Machine.RequestType;
-import replicatorg.machine.builder.MachineBuilder;
 import replicatorg.machine.builder.Direct;
+import replicatorg.machine.builder.MachineBuilder;
 import replicatorg.machine.builder.ToLocalFile;
 import replicatorg.machine.builder.ToRemoteFile;
 import replicatorg.machine.builder.UsingRemoteFile;
 import replicatorg.machine.model.MachineModel;
+import replicatorg.machine.model.ToolModel;
 import replicatorg.model.GCodeSource;
 import replicatorg.model.GCodeSourceCollection;
 import replicatorg.model.StringListSource;
@@ -69,22 +69,24 @@ class MachineThread extends Thread {
 		}
 	}
 	
-	// TODO: Rethink this.
-	class Timer {
+	// TODO: The timeout/elapse behaivor of this is 
+	// a little wonky. It could be converted to some standard timer someday
+	class MachineTimer {
 		private long lastEventTime = 0;
 		private boolean enabled = false;
-		private long intervalMs = 1000;
+		private long intervalMs = 3000;
 		
 		public void start(long interval) {
 			enabled = true;
 			intervalMs = interval;
+			lastEventTime = System.currentTimeMillis();
 		}
 		
 		public void stop() {
 			enabled = false;
 		}
 		
-		// send out updates
+		// checks for timeout elapsing, and resets the time for a new interval
 		public boolean elapsed() {
 			if (!enabled) {
 				return false;
@@ -92,14 +94,13 @@ class MachineThread extends Thread {
 			long curMillis = System.currentTimeMillis();
 			if (lastEventTime + intervalMs <= curMillis) {
 				lastEventTime = curMillis;
-				
 				return true;
 			}
 			return false;
 		}
 	}
 	
-	private Timer pollingTimer;
+	private MachineTimer pollingTimer;
 
 	// Link of machine commands to run
 	ConcurrentLinkedQueue<MachineCommand> pendingQueue;
@@ -139,7 +140,8 @@ class MachineThread extends Thread {
 	public MachineThread(Machine controller, Node machineNode) {
 		super("Machine Thread");
 		
-		pollingTimer = new Timer();
+		pollingTimer = new MachineTimer();
+		pollingTimer.start(1000);
 		
 		pendingQueue = new ConcurrentLinkedQueue<MachineCommand>();
 		
@@ -154,8 +156,13 @@ class MachineThread extends Thread {
 		
 		statusThread = new AssessStatusThread(this);
 		statusThread.start();
+
+
 	}
 
+	/**
+	 * Loads create warmup and cooldown commands from xml file
+	 */
 	private void loadExtraPrefs() {
 		String[] commands = null;
 		String command = null;
@@ -185,6 +192,11 @@ class MachineThread extends Thread {
 		}
 	}
 
+	/**
+	 * Takes a GCodeSource, and adds warmup and cooldown code to it.
+	 * @param source GCodeSource to work from
+	 * @return a new GCodeSourceCollection including warmup/cooldown code (if it is loaded)
+	 */
 	GCodeSource buildGCodeJob(GCodeSource source) {
 		Vector<GCodeSource> sources = new Vector<GCodeSource>();
 		sources.add(new StringListSource(warmupCommands));
@@ -230,6 +242,14 @@ class MachineThread extends Thread {
 					us.openSerial(targetPort);
 					connected = us.isConnected();
 				}
+				// Next, just ask the driver if it is ready.
+				else {
+					if (!driver.isInitialized()) {
+						driver.initialize();
+					}
+					
+					connected = driver.isInitialized();
+				}
 				
 				if (!connected) {
 					// If we couldn't connect, move back to being detached.
@@ -242,13 +262,11 @@ class MachineThread extends Thread {
 					setState(new MachineState(MachineState.State.NOT_ATTACHED), errorMessage);
 				}
 				else {
-					
 					// If the port is open, try to talk to the machine over it.
 					driver.initialize();
 					if (driver.isInitialized()) {
 						readName();
-						setState(new MachineState(MachineState.State.READY),
-								readyMessage());
+						setState(new MachineState(MachineState.State.READY), readyMessage());
 					} else {
 						setState(new MachineState(MachineState.State.NOT_ATTACHED));
 					}
@@ -256,7 +274,7 @@ class MachineThread extends Thread {
 			}
 			break;
 		case DISCONNECT:
-			// TODO: This seems wrong
+
 			if (state.isConnected()) {
 				driver.uninitialize();
 				setState(new MachineState(MachineState.State.NOT_ATTACHED), notConnectedMessage());
@@ -266,6 +284,13 @@ class MachineThread extends Thread {
 					us.closeSerial();
 				}
 			}
+			/// for some reason we want to advertise we are still not connected....
+			else { 
+				//TRICKY: in this case way may be disconnected, and re-advertising disconnected. 
+				//setState() will ignore the duplicate state, so we dircetly emit.
+				controller.emitStateChange(new MachineState(MachineState.State.NOT_ATTACHED), "Not Connected");
+			}
+
 			break;
 		case RESET:
 			if (state.isConnected()) {
@@ -278,8 +303,6 @@ class MachineThread extends Thread {
 		case BUILD_DIRECT:
 			if (state.canPrint()) {
 				startTimeMillis = System.currentTimeMillis();
-				
-				pollingTimer.start(1000);
 
 				if (!isSimulating()) {
 					driver.getCurrentPosition(false); // reconcile position
@@ -308,18 +331,33 @@ class MachineThread extends Thread {
 				}
 				
 				startTimeMillis = System.currentTimeMillis();
-
-				pollingTimer.start(1000);
 				
 				// Pad the job with start and end code
 				GCodeSource combinedSource = buildGCodeJob(command.source);
 				
-				machineBuilder = new ToRemoteFile(driver, simulator,
-											combinedSource, command.remoteName);
-	
+				ToRemoteFile trf = new ToRemoteFile(driver, simulator, combinedSource, command.remoteName);
+				if(trf.setupFailed)
+				{
+					//TRICKY:
+					//I am ashamed of this, but without adding a new state of "BUILD_CANCELLED"
+					// and making some changes to MainWindow.MachineStateChanged(), or by 
+					// changing the whole process by which this gets called, there is, apparently,
+					// no way to keep a "Build finished" dialog from popping up when this fails.
+					
+					//By calling not-attached we get the mainwindow to forget that it had started
+					// a print, so that the following call to ready doesn't pop up a message
+					// this may have unintended side effects>
+					setState(new MachineState(MachineState.State.NOT_ATTACHED));
+					setState(new MachineState(MachineState.State.READY));
+					break;
+				}
+				
+				machineBuilder = trf;
+
 				// TODO: This shouldn't be done here?
 				driver.invalidatePosition();
 				setState(new MachineState(MachineState.State.BUILDING));
+
 			}
 			break;
 		case BUILD_TO_FILE:
@@ -332,13 +370,29 @@ class MachineThread extends Thread {
 				startTimeMillis = System.currentTimeMillis();
 
 				// There is no need to reconcile the position.
-				pollingTimer.start(1000);
 				
 				// Pad the job with start and end code
 				GCodeSource combinedSource = buildGCodeJob(command.source);
 				
-				machineBuilder = new ToLocalFile(driver, simulator,
-											combinedSource, command.remoteName);
+				ToLocalFile lf = new ToLocalFile(driver, simulator,	combinedSource, command.remoteName);
+				if(lf.setupFailed)
+				{
+					//TRICKY:
+					// This is even worse than above, because we might already be NOT_ATTACHED
+					// and we don't emit repeated changes for the same state, we have to switch
+					// to something other than NOT_ATTACHED which WILL NOT end the build,
+					// then back to NOT_ATTACHED, finally, because we don't want to end on READY
+					// if we were never attached, we switch to READY only if we had been able to print
+					boolean connected = state.canPrint();
+					setState(new MachineState(MachineState.State.ERROR));
+					setState(new MachineState(MachineState.State.NOT_ATTACHED));
+					if(connected)
+						setState(new MachineState(MachineState.State.READY));
+					break;
+				}
+				
+				machineBuilder = lf;
+				
 				if (state.canPrint()) {
 					setState(new MachineState(MachineState.State.BUILDING), buildingMessage());
 				} else {
@@ -354,12 +408,16 @@ class MachineThread extends Thread {
 				
 				startTimeMillis = System.currentTimeMillis();
 				
-				pollingTimer.start(1000);
-				
-				machineBuilder = new UsingRemoteFile((SDCardCapture)driver, command.remoteName);
+				machineBuilder = new UsingRemoteFile(driver, command.remoteName);
 			
-				// TODO: what about this?
-				driver.getCurrentPosition(false); // reconcile position
+//				// TODO: what about this?
+//				System.out.println("pre-");
+//				driver.getCurrentPosition(false); // reconcile position
+//				System.out.println("post-");
+				
+				// TODO: is this what we wanted?
+				driver.invalidatePosition();
+				
 				setState(new MachineState(MachineState.State.BUILDING), buildingMessage());
 			}
 			break;
@@ -387,8 +445,8 @@ class MachineThread extends Thread {
 			break;
 		case STOP_ALL:
 			// TODO: This should be handled at the driver level?
-			driver.getMachine().currentTool().setTargetTemperature(0);
-			driver.getMachine().currentTool().setPlatformTargetTemperature(0);
+			//driver.getMachine().currentTool().setTargetTemperature(0);
+			//driver.getMachine().currentTool().setPlatformTargetTemperature(0);
 			
 			driver.stop(true);
 			
@@ -438,10 +496,12 @@ class MachineThread extends Thread {
 	}
 	
 	/**
-	 * Main machine thread loop.
+	 * Main machine thread loop for managing the connection to the bot.
 	 */
 	public void run() {
-		// This is our main loop.
+		
+		
+		/// This is our main loop.
 		while (true) {
 			
 			// First, check if the driver registered any errors
@@ -449,38 +509,45 @@ class MachineThread extends Thread {
 				DriverError error = driver.getError();
 
 				if(state.isConnected() && error.getDisconnected()) {
-					// If we were connected, but this error causes us to disconnect,
-					// transition to a disconnected state
-					setState(new MachineState(MachineState.State.NOT_ATTACHED),
-							error.getMessage());
+					// If we were connected & the error is a disconnect, set disconnected state
+					setState(new MachineState(MachineState.State.NOT_ATTACHED),error.getMessage());
 				}
 				else {
-					// Otherwise, transition to an error state, where we can still
-					// configure the machine, but can't print.
-					setState(new MachineState(MachineState.State.ERROR),
-							error.getMessage());
+					// transition to an error state, 
+					// in error state we can still configure the machine, but can't print.
+					setState(new MachineState(MachineState.State.ERROR), error.getMessage());
 				}
 			}
-			
-			//
 			
 			// Check for and run any control requests that might be in the queue.
 			while (!pendingQueue.isEmpty()) {
 				runCommand(pendingQueue.remove());
+			}
+
+			
+			if(state.isConnected())
+			{
+				/// Check the status poll machine.
+				if ( pollingTimer.elapsed() ) {
+					/// if we're not building, or if we are have 'moniter temp during build' enabled, 
+					//check for temp
+					boolean checkTempDuringBuild = Base.preferences.getBoolean("build.monitor_temp", true);
+
+					if ( false == state.isBuilding() || checkTempDuringBuild ) {
+						MachineCommand pollCmd = new MachineCommand( RequestType.RUN_COMMAND, new replicatorg.drivers.commands.ReadTemperature() );
+						this.scheduleRequest( pollCmd );
+						Vector<ToolModel> tools = controller.getModel().getTools();
+						for (ToolModel t : tools) {
+							controller.emitToolStatus(t);
+						}
+					}
+				}
 			}
 			
 			// If we are building
 			if ( state.isBuilding() && !state.isPaused() ) {
 				//run another instruction on the machine.
 				machineBuilder.runNext();
-				
-				// Check the status poll machine.
-				if (pollingTimer.elapsed()) {
-					if (Base.preferences.getBoolean("build.monitor_temp",false)) {
-						driver.readTemperature();
-						controller.emitToolStatus(driver.getMachine().currentTool());
-					}
-				}
 				
 				// Send out a progress event
 				// TODO: Should these be rate limited?
@@ -500,8 +567,6 @@ class MachineThread extends Thread {
 						setState(new MachineState(MachineState.State.NOT_ATTACHED),
 								notConnectedMessage());
 					}
-					
-					pollingTimer.stop();
 				}
 			}
 			
@@ -647,6 +712,7 @@ class MachineThread extends Thread {
 				name = n;
 			}
 			else {
+				Base.logger.fine("No name on the machine. Using the XML name of the machine");
 				parseName(); // Use name from XML file instead of reusing name from last connected machine
 			}
 		}

@@ -58,7 +58,7 @@ public class AvrdudeUploader extends AbstractFirmwareUploader {
 		}
 		if (manualReset == true) {
 			return "Press the reset button on the target board and click the \"Upload\" button " +
-			"to update the firmware.  Try to press the reset button as soon as you click \"Upload\".";
+			"to update the firmware.  Try to press the reset button just before you click \"Upload\".";
 		}
 		return super.getUploadInstructions();
 	}
@@ -102,8 +102,10 @@ public class AvrdudeUploader extends AbstractFirmwareUploader {
   public boolean upload() {
     Vector<String> commandDownloader = new Vector<String>();
     String avrBasePath = Base.getToolsPath();
-    
-    commandDownloader.add(avrBasePath + File.separator + "avrdude");
+    if(Base.preferences.getBoolean("uploader.useNative",false) )
+	commandDownloader.add("avrdude");    
+    else 
+    	commandDownloader.add(avrBasePath + File.separator + "avrdude");
     commandDownloader.add("-C" + avrBasePath + File.separator + "avrdude.conf");
     commandDownloader.add("-c" + protocol);
     commandDownloader.add("-P" + (Base.isWindows() ? "\\\\.\\" : "") + serialName);

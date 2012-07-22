@@ -3,6 +3,7 @@
  */
 package replicatorg.app.ui;
 
+import java.awt.Color;
 import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -25,11 +26,15 @@ import javax.swing.ComboBoxModel;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JFormattedTextField;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.JRadioButton;
+import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.KeyStroke;
 
@@ -38,6 +43,8 @@ import replicatorg.app.Base;
 import replicatorg.app.Base.InitialOpenBehavior;
 import replicatorg.app.util.PythonUtils;
 import replicatorg.app.util.SwingPythonSelector;
+import replicatorg.machine.MachineInterface;
+import replicatorg.machine.model.MachineType;
 import replicatorg.uploader.FirmwareUploader;
 
 /**
@@ -51,14 +58,17 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 	// the calling editor, so updates can be applied
 	MainWindow editor;
 
-	JTextField fontSizeField;
+	JFormattedTextField fontSizeField;
 	JTextField firmwareUpdateUrlField;
+	JTextField logPathField;
 	
 	private void showCurrentSettings() {		
 		Font editorFont = Base.getFontPref("editor.font","Monospaced,plain,12");
 		fontSizeField.setText(String.valueOf(editorFont.getSize()));
 		String firmwareUrl = Base.preferences.get("replicatorg.updates.url", FirmwareUploader.DEFAULT_UPDATES_URL);
 		firmwareUpdateUrlField.setText(firmwareUrl);
+		String logPath = Base.preferences.get("replicatorg.logpath", "");
+		logPathField.setText(logPath);
 	}
 	
 	private JCheckBox addCheckboxForPref(Container c, String text, final String pref, boolean defaultVal) {
@@ -93,17 +103,17 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 		    	Base.preferences.putInt(prefName,behavior.ordinal());
 		    }
 		}
-		c.add(new JLabel("On ReplicatorG launch:"),"wrap");
+		c.add(new JLabel("On ReplicatorG launch:"),"split");
 		// We don't have SELECTED_KEY in Java 1.5, so we'll do things the old-fashioned, ugly way.
 		JRadioButton b;
-		b = new JRadioButton(new RadioAction("Open last opened or save file",InitialOpenBehavior.OPEN_LAST));
+		b = new JRadioButton(new RadioAction("Open last opened or saved file",InitialOpenBehavior.OPEN_LAST));
     	if (InitialOpenBehavior.OPEN_LAST == openBehavior) { b.setSelected(true); }
 		bg.add(b);
-		c.add(b,"wrap");
+		c.add(b,"split");
 		b = new JRadioButton(new RadioAction("Open new file",InitialOpenBehavior.OPEN_NEW));
     	if (InitialOpenBehavior.OPEN_NEW == openBehavior) { b.setSelected(true); }
 		bg.add(b);
-		c.add(b,"wrap");
+		c.add(b,"wrap 10px");
 	}
 
 	JComboBox makeDebugLevelDropdown() {
@@ -130,42 +140,132 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 		return cb;
 	}
 	
-	public PreferencesWindow() {
+	// Copied from app.ui.controlpanel.ExtruderPanel
+	private double confirmTemperature(double target, String limitPrefName, double defaultLimit) {
+		double limit = Base.preferences.getDouble("temperature.acceptedLimit", defaultLimit);
+		if (target > limit){
+			// Temperature warning dialog!
+			int n = JOptionPane.showConfirmDialog(this,
+					"<html>Setting the temperature to <b>" + Double.toString(target) + "\u00b0C</b> may<br>"+
+					"involve health and/or safety risks or cause damage to your machine!<br>"+
+					"The maximum recommended temperature is <b>"+Double.toString(limit)+"</b>.<br>"+
+					"Do you accept the risk and still want to set this temperature?",
+					"Danger",
+					JOptionPane.YES_NO_OPTION,
+					JOptionPane.WARNING_MESSAGE);
+			if (n == JOptionPane.YES_OPTION) {
+				return target;
+			} else if (n == JOptionPane.NO_OPTION) {
+				return Double.MIN_VALUE;
+			} else { // Cancel or whatnot
+				return Double.MIN_VALUE;
+			}
+		}  else {
+			return target;
+		}
+	}
+	
+	/**
+	 * 
+	 * @param driver Needed for the Replicator-specific options
+	 */
+	public PreferencesWindow(final MachineInterface machine) {
 		super("Preferences");
 		setResizable(true);
 		
 		Image icon = Base.getImage("images/icon.gif", this);
 		setIconImage(icon);
 		
-		Container content = this.getContentPane();
+		JTabbedPane prefTabs = new JTabbedPane();
+		
+		JPanel basic = new JPanel();
+		
+//		Container content = this.getContentPane();
+		Container content = basic;
 		content.setLayout(new MigLayout("fill"));
 
 		content.add(new JLabel("MainWindow font size: "), "split");
-		fontSizeField = new JTextField(4);
+		fontSizeField = new JFormattedTextField(Base.getLocalFormat());
+		fontSizeField.setColumns(4);
 		content.add(fontSizeField);
 		content.add(new JLabel("  (requires restart of ReplicatorG)"), "wrap");
 
-		addCheckboxForPref(content,"Monitor temperature during builds","build.monitor_temp",false);
-		addCheckboxForPref(content,"Automatically connect at startup","replicatorg.autoconnect",true);
+		boolean checkTempDuringBuild = Base.preferences.getBoolean("build.monitor_temp", true);
+		
+		addCheckboxForPref(content,"Monitor temperature during builds","build.monitor_temp", checkTempDuringBuild);
+		addCheckboxForPref(content,"Automatically connect to machine at startup","replicatorg.autoconnect",true);
 		addCheckboxForPref(content,"Show experimental machine profiles","machine.showExperimental",false);
-		addCheckboxForPref(content,"Show simulator during builds","build.showSimulator",false);
-		addCheckboxForPref(content,"Break Z motion into seperate moves (normally false)","replicatorg.parser.breakzmoves",false);
+		addCheckboxForPref(content,"Review GCode for potential toolhead problems before building","build.safetyChecks",true);
+		addCheckboxForPref(content,"Break Z motion into separate moves (normally false)","replicatorg.parser.breakzmoves",false);
 		addCheckboxForPref(content,"Show starfield in model preview window","ui.show_starfield",false);
+		addCheckboxForPref(content,"Notifications in System tray","ui.preferSystemTrayNotifications",false);
+		addCheckboxForPref(content,"Automatically regenerate gcode when building from model view.","build.autoGenerateGcode",true);
+		addCheckboxForPref(content,"Use native avrdude for uploading code","uploader.useNative",false);
+
+		JPanel advanced = new JPanel();
+		content = advanced;
+		content.setLayout(new MigLayout("fill"));
+		
+		JButton modelColorButton;
+		modelColorButton = new JButton("Choose model color");
+		modelColorButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				// Note that this color is also defined in EditingModel.java
+				Color modelColor = new Color(Base.preferences.getInt("ui.modelColor",-19635));
+				modelColor = JColorChooser.showDialog(
+						null,
+		                "Choose Model Color",
+		                modelColor);
+		        if(modelColor == null)
+		        	return;
+				
+		        Base.preferences.putInt("ui.modelColor", modelColor.getRGB());
+		        Base.getEditor().refreshPreviewPanel();
+			}
+		});
+		modelColorButton.setVisible(true);
+		content.add(modelColorButton,"split");
+		
+		
+		JButton backgroundColorButton;
+		backgroundColorButton = new JButton("Choose background color");
+		backgroundColorButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				// Note that this color is also defined in EditingModel.java
+				Color backgroundColor = new Color(Base.preferences.getInt("ui.backgroundColor", 0));
+				backgroundColor = JColorChooser.showDialog(
+						null,
+		                "Choose Background Color",
+		                backgroundColor);
+		        if(backgroundColor == null)
+		        	return;
+		                
+		        Base.preferences.putInt("ui.backgroundColor", backgroundColor.getRGB());
+		        Base.getEditor().refreshPreviewPanel();
+			}
+		});
+		backgroundColorButton.setVisible(true);
+		content.add(backgroundColorButton,"wrap");
+		
 		
 		content.add(new JLabel("Firmware update URL: "),"split");
 		firmwareUpdateUrlField = new JTextField(34);
-		content.add(firmwareUpdateUrlField,"wrap");
+		content.add(firmwareUpdateUrlField,"growx, wrap");
 
 		{
-			content.add(new JLabel("Arc resolution (in mm): "),"split");
+			JLabel arcResolutionLabel = new JLabel("Arc resolution (in mm): ");
+			content.add(arcResolutionLabel,"split");
 			double value = Base.preferences.getDouble("replicatorg.parser.curve_segment_mm", 1.0);
-			JFormattedTextField arcResolutionField = new JFormattedTextField(new Double(value));
-			content.add(arcResolutionField,"wrap");
+			JFormattedTextField arcResolutionField = new JFormattedTextField(Base.getLocalFormat());
+			arcResolutionField.setValue(new Double(value));
+			content.add(arcResolutionField);
 			String arcResolutionHelp = "<html><small><em>" +
 				"The arc resolution is the default segment length that the gcode parser will break arc codes <br>"+
 				"like G2 and G3 into.  Drivers that natively handle arcs will ignore this setting." +
 				"</em></small></html>";
-			content.add(new JLabel(arcResolutionHelp),"growx,wrap");
+			arcResolutionField.setToolTipText(arcResolutionHelp);
+			arcResolutionLabel.setToolTipText(arcResolutionHelp);
+//			content.add(new JLabel(arcResolutionHelp),"growx,wrap");
 			arcResolutionField.setColumns(10);
 			arcResolutionField.addPropertyChangeListener(new PropertyChangeListener() {
 				public void propertyChange(PropertyChangeEvent evt) {
@@ -183,13 +283,162 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 		}
 		
 		{
+			JLabel sfTimeoutLabel = new JLabel("Skeinforge timeout: ");
+			content.add(sfTimeoutLabel,"split, gap unrelated");
+			int value = Base.preferences.getInt("replicatorg.skeinforge.timeout", -1);
+			JFormattedTextField sfTimeoutField = new JFormattedTextField(Base.getLocalFormat());
+			sfTimeoutField.setValue(new Integer(value));
+			content.add(sfTimeoutField,"wrap 10px, growx");
+			String sfTimeoutHelp = "<html><small><em>" +
+				"The Skeinforge timeout is the number of seconds that replicatorg will wait while the<br>" +
+				"Skeinforge preferences window is open. If you find that RepG freezes after editing profiles<br>" +
+				"you can set this number greater than -1 (-1 means no timeout)." +
+				"</em></small></html>";
+			sfTimeoutField.setToolTipText(sfTimeoutHelp);
+			sfTimeoutLabel.setToolTipText(sfTimeoutHelp);
+//			content.add(new JLabel(sfTimeoutHelp),"growx,wrap");
+			sfTimeoutField.setColumns(10);
+			sfTimeoutField.addPropertyChangeListener(new PropertyChangeListener() {
+				public void propertyChange(PropertyChangeEvent evt) {
+					if (evt.getPropertyName() == "value") {
+						try {
+							Integer v = ((Number)evt.getNewValue()).intValue();
+							if (v == null) return;
+							Base.preferences.putInt("replicatorg.skeinforge.timeout", v.intValue());
+						} catch (ClassCastException cce) {
+							Base.logger.warning("Unexpected value type: "+evt.getNewValue().getClass().toString());
+						}
+					}
+				}
+			});
+		}
+		
+		{
 			content.add(new JLabel("Debugging level (default INFO):"),"split");
-			content.add(makeDebugLevelDropdown(),"wrap");
+			content.add(makeDebugLevelDropdown(), "wrap");
+
+			final JCheckBox logCb = new JCheckBox("Log to file");
+			logCb.setSelected(Base.preferences.getBoolean("replicatorg.useLogFile",false));
+			content.add(logCb, "split");
+			logCb.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent e) {
+					Base.preferences.putBoolean("replicatorg.useLogFile",logCb.isSelected());
+				}
+			});
+			
+			final JLabel logPathLabel = new JLabel("Log file name: "); 
+			content.add(logPathLabel,"split");
+			logPathField = new JTextField(34);
+			content.add(logPathField,"growx, wrap 10px");
+			logPathField.setEnabled(logCb.isSelected());
+			logPathLabel.setEnabled(logCb.isSelected());
+
+			logCb.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent e) {
+					JCheckBox box = (JCheckBox)e.getSource();
+					logPathField.setEnabled(box.isSelected());
+					logPathLabel.setEnabled(box.isSelected());
+				}
+			});
+
+		}
+		
+		{
+			final int defaultTemp = 75;
+			final String tooltipGeneral = "When enabled, starting all builds heats components to this temperature";
+			final String tooltipHead = "Set preheat temperature for the specified toolhead";
+			final String tooltipPlatform = "Set preheat temperature for the build platfom";
+			
+			
+			final JCheckBox preheatCb = new JCheckBox("Preheat builds");
+			preheatCb.setToolTipText(tooltipGeneral);
+			content.add(preheatCb, "split");
+			
+			preheatCb.addActionListener(new ActionListener(){
+				@Override
+				public void actionPerformed(ActionEvent arg0) {
+					Base.preferences.putBoolean("build.doPreheat", preheatCb.isSelected());
+				}
+			});
+			preheatCb.setSelected(Base.preferences.getBoolean("build.doPreheat", false));
+			
+			final JLabel t0Label = new JLabel("Toolhead Right: ");
+			final JLabel t1Label = new JLabel("Toolhead Left: ");
+			final JLabel pLabel = new JLabel("Platform: ");
+			
+			Integer t0Value = Base.preferences.getInt("build.preheatTool0", defaultTemp);
+			Integer t1Value = Base.preferences.getInt("build.preheatTool1", defaultTemp);
+			Integer pValue = Base.preferences.getInt("build.preheatPlatform", defaultTemp);
+			
+			final JFormattedTextField t0Field = new JFormattedTextField(Base.getLocalFormat());
+			final JFormattedTextField t1Field = new JFormattedTextField(Base.getLocalFormat());
+			final JFormattedTextField pField = new JFormattedTextField(Base.getLocalFormat());
+			
+			t0Field.setToolTipText(tooltipHead);
+			t0Label.setToolTipText(tooltipHead);
+			t1Field.setToolTipText(tooltipHead);
+			t1Label.setToolTipText(tooltipHead);
+			pField.setToolTipText(tooltipPlatform);
+			pLabel.setToolTipText(tooltipPlatform);
+
+			t0Field.setValue(t0Value);
+			t1Field.setValue(t1Value);
+			pField.setValue(pValue);
+			
+			// let's avoid creating too many Anon. inner Listeners, also is fewer lines (and just as clear)!
+			PropertyChangeListener p = new PropertyChangeListener() {
+				public void propertyChange(PropertyChangeEvent evt) {
+					if (evt.getPropertyName() == "value") {
+						double target;
+						if(evt.getSource() == t0Field)
+						{
+							target = ((Number)t0Field.getValue()).doubleValue();
+							target = confirmTemperature(target,"temperature.acceptedLimit",200.0);
+							if (target == Double.MIN_VALUE) {
+								t0Field.setValue(Base.preferences.getInt("build.preheatTool0", defaultTemp));
+								return;
+							}
+							Base.preferences.putInt("build.preheatTool0", (int)target);
+						}
+						else if(evt.getSource() == t1Field)
+						{
+							target = ((Number)t1Field.getValue()).doubleValue();
+							target = confirmTemperature(target,"temperature.acceptedLimit",200.0);
+							if (target == Double.MIN_VALUE) {
+								t0Field.setValue(Base.preferences.getInt("build.preheatTool1", defaultTemp));
+								return;
+							}
+							Base.preferences.putInt("build.preheatTool1", (int)target);
+						}
+						else if(evt.getSource() == pField)
+						{
+							target = ((Number)pField.getValue()).doubleValue();
+							target = confirmTemperature(target,"temperature.acceptedLimit.bed",110.0);
+							if (target == Double.MIN_VALUE) {
+								t0Field.setValue(Base.preferences.getInt("build.preheatPlatform", defaultTemp));
+								return;
+							}
+							Base.preferences.putInt("build.preheatPlatform", (int)target);
+						}
+					}
+				}
+			};
+
+			t0Field.addPropertyChangeListener(p);
+			t1Field.addPropertyChangeListener(p);
+			pField.addPropertyChangeListener(p);
+
+			content.add(t0Label, "split, gap 20px");
+			content.add(t0Field, "split, growx");
+			content.add(t1Label, "split, gap unrelated");
+			content.add(t1Field, "split, growx");
+			content.add(pLabel, "split, gap unrelated");
+			content.add(pField, "split, growx, wrap 10px");
 		}
 		
 		{
 			JButton b = new JButton("Select Python interpreter...");
-			content.add(b,"spanx,wrap");
+			content.add(b,"spanx,wrap 10px");
 			b.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent e) {
 					SwingPythonSelector sps = new SwingPythonSelector(PreferencesWindow.this);
@@ -200,25 +449,36 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 				}
 			});
 		}
-		//"replicatorg.parser.curve_segment_mm"
-
+		
 		addInitialFilePrefs(content);
+		
+		prefTabs.add(basic, "Basic");
+		prefTabs.add(advanced, "Advanced");
 
-		JButton delPrefs = new JButton("Restore all defaults (includes driver choice, etc.)");
-		content.add(delPrefs,"wrap");
-		delPrefs.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent evt) {
-				Base.resetPreferences();
-				showCurrentSettings();
+		content = getContentPane();
+		content.setLayout(new MigLayout());
+		
+		content.add(prefTabs, "wrap");
+		
+		JButton allPrefs = new JButton("View Preferences Table");
+		content.add(allPrefs, "split");
+		allPrefs.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				JFrame advancedPrefs = new AdvancedPrefs();
+				advancedPrefs.setVisible(true);
 			}
-			
-			
 		});
 
-		// [ OK ] [ Cancel ] maybe these should be next to the message?
-
-		JButton button;
+		// Also available as a menu item in the main gui.
+		JButton delPrefs = new JButton("Reset all preferences");
+		content.add(delPrefs);
+		delPrefs.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent evt) {
+				editor.resetPreferences();
+			}
+		});
 		
+		JButton button;
 		button = new JButton("Close");
 		button.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
@@ -227,11 +487,11 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 			}
 		});
 		content.add(button, "tag ok");
-
+		
 		showCurrentSettings();
 
+		
 		// closing the window is same as hitting cancel button
-
 		addWindowListener(new WindowAdapter() {
 			public void windowClosing(WindowEvent e) {
 				dispose();
@@ -252,7 +512,7 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 
 		// handle window closing commands for ctrl/cmd-W or hitting ESC.
 
-		content.addKeyListener(new KeyAdapter() {
+		getContentPane().addKeyListener(new KeyAdapter() {
 			public void keyPressed(KeyEvent e) {
 				KeyStroke wc = MainWindow.WINDOW_CLOSE_KEYSTROKE;
 				if ((e.getKeyCode() == KeyEvent.VK_ESCAPE)
@@ -293,6 +553,11 @@ public class PreferencesWindow extends JFrame implements GuiConstants {
 			Base.preferences.put("replicatorg.updates.url",firmwareUpdateUrlField.getText());
 			FirmwareUploader.checkFirmware(); // Initiate a new firmware check
 		}
+
+		String logPath = logPathField.getText();
+		Base.preferences.put("replicatorg.logpath", logPath);
+		Base.setLogFile(logPath);
+		
 		editor.applyPreferences();
 	}
 

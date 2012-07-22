@@ -29,6 +29,7 @@ package replicatorg.drivers.reprap;
 
 import java.io.IOException;
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.Date;
 import java.util.EnumSet;
 import java.util.LinkedList;
@@ -78,7 +79,10 @@ public class SimpleRepRap5DDriver extends SerialDriver {
 		bufferSize = 0;
 		setInitialized(false);
 
-		df = new DecimalFormat("#.######");
+		//Thank you Alexey (http://replicatorg.lighthouseapp.com/users/166956)
+		DecimalFormatSymbols dfs = DecimalFormatSymbols.getInstance();
+		dfs.setDecimalSeparator('.');
+		df = new DecimalFormat("#.######", dfs);
 	}
 
 	public String getDriverName() {
@@ -409,10 +413,10 @@ public class SimpleRepRap5DDriver extends SerialDriver {
 	/***************************************************************************
 	 * Motor interface functions
 	 **************************************************************************/
-	public void setMotorRPM(double rpm) throws RetryException {
+	public void setMotorRPM(double rpm, int toolhead) throws RetryException {
 		sendCommand(_getToolCode() + "M108 R" + df.format(rpm));
 
-		super.setMotorRPM(rpm);
+		super.setMotorRPM(rpm, toolhead);
 	}
 
 	public void setMotorSpeedPWM(int pwm) throws RetryException {

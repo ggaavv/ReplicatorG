@@ -3,26 +3,14 @@ package replicatorg.plugin.toolpath.skeinforge;
 import java.awt.Frame;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.KeyAdapter;
-import java.awt.event.KeyEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
-import java.lang.ref.WeakReference;
 import java.util.List;
-import java.util.logging.Level;
 
-import javax.swing.DefaultListModel;
+import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
-import javax.swing.JList;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.ListSelectionModel;
-import javax.swing.event.ListSelectionEvent;
-import javax.swing.event.ListSelectionListener;
 
 import net.miginfocom.swing.MigLayout;
 import replicatorg.app.Base;
@@ -30,242 +18,141 @@ import replicatorg.plugin.toolpath.skeinforge.SkeinforgeGenerator.Profile;
 import replicatorg.plugin.toolpath.skeinforge.SkeinforgeGenerator.SkeinforgePreference;
 
 class ConfigurationDialog extends JDialog {
-	final String manageStr = "Manage profiles...";
+	final boolean postProcessToolheadIndex = true;
 	final String profilePref = "replicatorg.skeinforge.profilePref";
-	JButton editButton = new JButton("Edit...");
-	JButton duplicateButton = new JButton("Duplicate...");
-	JButton locateButton = new JButton("Locate...");
-	JButton deleteButton = new JButton("Delete");
 	
 	JButton generateButton = new JButton("Generate Gcode");
 	JButton cancelButton = new JButton("Cancel");
 	
-	private WeakReference<SkeinforgeGenerator> parentGenerator;
-	private List<Profile> profiles = null; // NB: must explicitly deallocate at close time
+	/* these must be explicitly nulled at close because of a java bug:
+	 * http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=6497929
+	 * 
+	 * because JDialogs may never be garbage collected, anything they keep reference to 
+	 * may never be gc'd. By explicitly nulling these in the setVisible() function
+	 * we allow them to be removed.
+	 */
+	private SkeinforgeGenerator parentGenerator = null;
+	private List<Profile> profiles = null;
 	
 	JPanel profilePanel = new JPanel();
-	JPanel buttonPanel = new JPanel();
 	
-	private void loadList(JList list) {
-		list.removeAll();
-		profiles = parentGenerator.get().getProfiles();
-		DefaultListModel model = new DefaultListModel();
+	/**
+	 * Fills a combo box with a list of skeinforge profiles
+	 * @param comboBox to fill with list of skeinforge profiles
+	 */
+	private void loadList(JComboBox comboBox) {
+		
+		comboBox.removeAllItems();
+		profiles = parentGenerator.getProfiles();
+		DefaultComboBoxModel model = new DefaultComboBoxModel();
 		int i=0;
-		int foundLastProfile = -1;
+		int selectedProfile = -1;
 		for (Profile p : profiles) {
+			///we display all profiles for all machines.
+			// at MBI customer support's request.
 			model.addElement(p.toString());
+			
 			if(p.toString().equals(Base.preferences.get("lastGeneratorProfileSelected","---")))
 			{
 				Base.logger.fine("Selecting last used element: " + p);
-				foundLastProfile = i;
+				/// default select the last profile that matches 
+				// the currently selected machine type
+				if(ProfileUtils.shouldDisplay(p)) {
+					selectedProfile = i;
+				}
 			}
 			i++;
 		}
-		list.setModel(model);
-		list.clearSelection();
-		if(foundLastProfile != -1) {
-			list.setSelectedIndex(foundLastProfile);	
-			generateButton.setEnabled(true);
-			generateButton.requestFocusInWindow();
-			generateButton.setFocusPainted(true);
-		}			
+		comboBox.setModel(model);
+		if(selectedProfile != -1) {
+			comboBox.setSelectedIndex(selectedProfile);
+		}
 	}
 
 	/**
 	 * Help reduce effects of miserable memory leak.
-	 * http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=6497929
+	 * see declarations above.
 	 */
 	@Override
 	public void setVisible(boolean b) {
 		super.setVisible(b);
-		parentGenerator = null;
+		if(!b)
+		{
+			parentGenerator = null;
+			profiles = null;
+		}
 	}
 
-	final JList prefList = new JList();
-
-	private Profile getListedProfile(int idx) {
-		return profiles.get(idx);
-	}
+	final JComboBox prefPulldown = new JComboBox();
 
 	public ConfigurationDialog(final Frame parent, final SkeinforgeGenerator parentGeneratorIn) {
 		super(parent, true);
-		parentGenerator = new WeakReference<SkeinforgeGenerator>(parentGeneratorIn);
+
+		parentGenerator = parentGeneratorIn;
 		setTitle("GCode Generator");
 		setLayout(new MigLayout("aligny, top, ins 5, fill"));
-
-		editButton.setToolTipText("Click to edit this profile's properties.");
-		deleteButton.setToolTipText("Click to remove this profile. Note that this can not be undone.");
-		locateButton.setToolTipText("Click to find the folder for this profile, e.g. to make backups or to share your settings.");
-		duplicateButton.setToolTipText("This will make a copy of the currently selected profile, with a new name that you provide.");
 		
-		// have to set this. Something wrong with the initial use of the
-		// ListSelectionListener
-		generateButton.setEnabled(false);
-				
-		editButton.setEnabled(false);
-		locateButton.setEnabled(false);
-		deleteButton.setEnabled(false);
-		duplicateButton.setEnabled(false);
-
-		profilePanel.setLayout(new MigLayout("top, ins 0, fillx"));
-		profilePanel.add(new JLabel("Select a Skeinforge profile:"), "wrap");
-
-		prefList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-		prefList.addListSelectionListener(new ListSelectionListener() {
-
-			public void valueChanged(ListSelectionEvent selectionEvent) {
-				boolean selected = !((JList) selectionEvent.getSource())
-						.isSelectionEmpty();
-				generateButton.setEnabled(selected);
-				editButton.setEnabled(selected);
-				locateButton.setEnabled(selected);
-				deleteButton.setEnabled(selected);
-				duplicateButton.setEnabled(selected);
+		add(new JLabel("Slicing Profile:"), "split 2");
+		
+		// This is intended to fix a bug where the "Generate Gcode"
+		// button doesn't get enabled 
+		prefPulldown.addActionListener(new ActionListener(){
+			@Override
+			public void actionPerformed(ActionEvent arg0) {
+				generateButton.setEnabled(true);
+				generateButton.requestFocusInWindow();
+				generateButton.setFocusPainted(true);
 			}
 		});
 		
-		// Add a listener for mouse clicks
-		prefList.addMouseListener(new MouseAdapter() {
-			public void mouseClicked(MouseEvent evt) {
-		        JList list = (JList)evt.getSource();
-		        if (evt.getClickCount() == 2) { // Double-click generates with this profile
-		            int idx = list.locationToIndex(evt.getPoint());
-		            Profile p = getListedProfile(idx);
-					Base.preferences.put("lastGeneratorProfileSelected",p.toString());
-					parentGenerator.get().configSuccess = true;
-					parentGenerator.get().profile = p.getFullPath();
-					setVisible(false);
-		        }
-		    }
-		});
-		loadList(prefList);
-		profilePanel.add(prefList, "growx, growy");
+		/// Fills UI with the list of Skeinforge settings/options
+		loadList(prefPulldown); 
+		add(prefPulldown, "wrap, growx, gapbottom 10");
 
-		prefList.addKeyListener( new KeyAdapter() {
-			public void keyPressed ( KeyEvent e ) {
-				Base.logger.fine("key pressed event: "+e);
-				if(e.getKeyCode() == KeyEvent.VK_ENTER)
-				{
-					int idx = prefList.getSelectedIndex();
-					Base.logger.fine("idx="+idx);
-					Profile p = getListedProfile(idx);
-					Base.preferences.put("lastGeneratorProfileSelected",p.toString());
-					parentGenerator.get().configSuccess = true;
-					parentGenerator.get().profile = p.getFullPath();
-					setVisible(false);
-				} else if(e.getKeyCode() == KeyEvent.VK_ESCAPE) {
-					setVisible(false);
-				}
-				
-			}
-	     }
-		);
-		profilePanel.add(editButton, "split,flowy,growx");
-		editButton.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				int idx = prefList.getSelectedIndex();
-				if (idx == -1) {
-					JOptionPane.showMessageDialog(parent,
-							"Select a profile to edit.");
-				} else {
-					Profile p = getListedProfile(idx);
-					parentGenerator.get().editProfile(p);
-				}
-			}
-		});
-
-		profilePanel.add(duplicateButton, "growx,flowy");
-		duplicateButton.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				int idx = prefList.getSelectedIndex();
-				String newName = JOptionPane.showInputDialog(parent,
-						"Name your new profile:");
-				if (newName != null) {
-					Profile p = getListedProfile(idx);
-					Profile newp = parentGenerator.get().duplicateProfile(p, newName);
-					loadList(prefList);
-					// Select new profile
-					if (newp != null) prefList.setSelectedValue(newp.toString(), true);
-					pack();
-				}
-			}
-		});
-		
-		profilePanel.add(locateButton, "split,flowy,growx");
-		locateButton.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				int idx = prefList.getSelectedIndex();
-				if (idx == -1) {
-				} else {
-					Profile p = getListedProfile(idx);
-					boolean result = new ProfileUtils().openFolder(p);
-					Base.logger.log(Level.FINEST,
-							"Opening directory for profile: "+ result);
-				}
-			}
-		});
-
-
-		profilePanel.add(deleteButton, "wrap,growx");
-		deleteButton.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				int idx = prefList.getSelectedIndex();
-				Profile p = getListedProfile(idx);
-				
-				int userResponse = JOptionPane.showConfirmDialog(null,
-						"Are you sure you want to delete profile " 
-						+ p.toString() + "? This cannot be undone.",
-						"Delete Profile", JOptionPane.YES_NO_OPTION);
-				if (userResponse == JOptionPane.YES_OPTION) {
-
-					boolean result = new ProfileUtils().delete(p);
-					loadList(prefList);
-					pack();
-					Base.logger.log(Level.INFO, "Profile " + p.getFullPath()
-							+ " deleted: " + result);
-				}
-			}
-		});
-		
-		add(profilePanel, "wrap, growx");
-
-		for (SkeinforgePreference preference: parentGenerator.get().preferences) {
-			add(preference.getUI(), "wrap");
+		for (SkeinforgePreference preference: parentGenerator.getPreferences()) {
+			add(preference.getUI(), "growx, wrap");
 		}
-
-		buttonPanel.setLayout(new MigLayout("aligny, top, ins 0"));
+		
+		generateButton.setToolTipText("Generates GCode instructions for your machine.");
 		
 		add(generateButton, "tag ok, split 2");
 		add(cancelButton, "tag cancel");
+
 		generateButton.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent arg0) {
-				if(!parentGenerator.get().runSanityChecks()) {
-					return;
-				}
-				
-				int idx = prefList.getSelectedIndex();
-				Profile p = getListedProfile(idx);
-				Base.preferences.put("lastGeneratorProfileSelected",p.toString());
-				parentGenerator.get().configSuccess = true;
-				parentGenerator.get().profile = p.getFullPath();
-				setVisible(false);
-				SkeinforgeGenerator.setSelectedProfile(p.toString());
+				parentGenerator.configSuccess = configureGenerator();
+				setVisible(!parentGenerator.configSuccess);
 			}
 		});
 		cancelButton.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent arg0) {
-				parentGenerator.get().configSuccess = false;
+				parentGenerator.configSuccess = false;
 				setVisible(false);
 			}
 		});
-		//add(buttonPanel, "wrap, growx");
+
+	}
+	
+	/**
+	 * Does pre-skeinforge generation tasks
+	 */
+	protected boolean configureGenerator()
+	{
+		if(!parentGenerator.runSanityChecks()) {
+			return false;
+		}
 		
-		addWindowListener( new WindowAdapter() {
-			@Override
-			public void windowClosed(WindowEvent e) {
-				profiles = null;
-				super.windowClosed(e);
-			}
-		});
+		int idx = prefPulldown.getSelectedIndex();
+		
+		if(idx == -1) {
+			return false;
+		}
+		
+		Profile p = ProfileUtils.getListedProfile(
+				prefPulldown.getModel(), profiles, idx);
+		Base.preferences.put("lastGeneratorProfileSelected",p.toString());
+		parentGenerator.profile = p.getFullPath();
+		SkeinforgeGenerator.setSelectedProfile(p.toString());
+		return true;
 	}
 };

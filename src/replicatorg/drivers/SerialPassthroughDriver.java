@@ -25,6 +25,8 @@ package replicatorg.drivers;
 
 import java.io.IOException;
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.text.NumberFormat;
 import java.util.Date;
 import java.util.EnumSet;
 import java.util.LinkedList;
@@ -58,8 +60,11 @@ public class SerialPassthroughDriver extends SerialDriver {
 	 */
 	private String result = "";
 
-	private DecimalFormat df;
-
+    private NumberFormat df = Base.getLocalFormat();
+    {
+    	df.setMaximumFractionDigits(6);
+    }
+    
 	private byte[] responsebuffer = new byte[512];
 
 	public SerialPassthroughDriver() {
@@ -69,8 +74,6 @@ public class SerialPassthroughDriver extends SerialDriver {
 		commands = new LinkedList<Integer>();
 		bufferSize = 0;
 		setInitialized(false);
-
-		df = new DecimalFormat("#.######");
 	}
 
 	public void loadXML(Node xml) {
@@ -342,10 +345,10 @@ public class SerialPassthroughDriver extends SerialDriver {
 	 * Motor interface functions
 	 * @throws RetryException 
 	 **************************************************************************/
-	public void setMotorRPM(double rpm) throws RetryException {
+	public void setMotorRPM(double rpm, int toolhead) throws RetryException {
 		sendCommand(_getToolCode() + "M108 R" + df.format(rpm));
 
-		super.setMotorRPM(rpm);
+		super.setMotorRPM(rpm, toolhead);
 	}
 
 	public void setMotorSpeedPWM(int pwm) throws RetryException {
